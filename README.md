@@ -1,4 +1,32 @@
-# cgRNASP
+# cgRNASP ? fixed-geometry frustration extension
+
+This fork adds fast residue-pair exports and all 16 A/C/G/U substitutions for
+native contacts. It reuses the original three-bead potentials and energy weights.
+The upstream programs and data remain unchanged.
+
+```sh
+python build.py --with-upstream
+python -m unittest discover -s tests -v
+```
+
+```sh
+./build/cgRNASP_frustration mutate input.pdb --contacts contacts.csv \
+  --data-dir ./cgRNASP/data --output-dir ./test-output/mutations
+```
+
+On Windows use `build/cgRNASP_frustration.exe`.
+
+The scorer keeps P/C4'/N9-or-N1 coordinates fixed and updates nucleotide types in
+memory. `E_total` includes the effects on both residues' interactions with their
+environment. No atomistic mutation or relaxation is performed.
+
+See [usage, file formats and input choices](docs/fixed-geometry.md) and the
+[Python adapter](examples/python/cgrnasp.py). Outputs are `reference_cg.pdb`,
+`pairs.csv`, `energy_components.csv`, `run.json`, and, in mutation mode,
+`contact_variants.csv`.
+
+## Upstream project
+
 cgRNASP: coarse-grained statistical potentials with residue separation for RNA structure evaluation.
 
 We developed our residue-separation-based CG statistical potentials (cgRNASP) at several CG levels: 
