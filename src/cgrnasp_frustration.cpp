@@ -116,11 +116,12 @@ struct Options {
 };
 
 void help() {
-    std::cout << "cgRNASP_frustration 0.1.0 (" << CGRNASP_SOURCE_VERSION << ")\n"
+    std::cout << "cgRNASP_frustration 0.2.0 (" << CGRNASP_SOURCE_VERSION << ")\n"
         << "Usage: cgRNASP_frustration score INPUT.pdb --output-dir DIR [options]\n"
-        << "       cgRNASP_frustration mutate INPUT.pdb --contacts PAIRS.csv --output-dir DIR [options]\n"
+        << "       cgRNASP_frustration mutate INPUT.pdb --output-dir DIR [--contacts PAIRS.csv] [options]\n"
         << "Options: --data-dir DIR --model-index N --sequence-separation pdb|ordinal\n"
         << "         --skip-unsupported-residues\n"
+        << "Without --contacts, all residue pairs in the cgRNASP distance ranges are selected.\n"
         << "Only the selected model and P/C4'/N9-or-N1 beads are scored. Coordinates stay fixed.\n";
 }
 
@@ -145,7 +146,6 @@ Options options(int argc, char** argv) {
         else throw std::runtime_error("Unknown option: " + flag);
     }
     if (o.output.empty()) throw std::runtime_error("--output-dir is required");
-    if (o.mode == "mutate" && o.contacts.empty()) throw std::runtime_error("mutate requires --contacts");
     if (o.separation != "pdb" && o.separation != "ordinal") throw std::runtime_error("Separation must be pdb or ordinal");
     o.output = fs::absolute(o.output); o.data = fs::absolute(o.data);
     if (fs::exists(o.output) && (!fs::is_directory(o.output) || !fs::is_empty(o.output)))
@@ -293,8 +293,8 @@ std::vector<Contact> read_contacts(const Options& o, const Structure& s) {
         const auto fields = csv_fields(line);
         if (fields.size() != header.size()) throw std::runtime_error("Contacts CSV row has incorrect field count");
         const auto field = [&](const std::string& name) { return trim(fields.at(columns.at(name))); };
-        const std::string type = columns.count("contact_type") ? field("contact_type") : "contact";
-        if (type.empty() || type == "unannotated") continue;
+        std::string type = columns.count("contact_type") ? field("contact_type") : "contact";
+        if (type.empty()) type = "contact";
         auto i = s.index.find(key(field("chain_i"), field("residue_i")));
         auto j = s.index.find(key(field("chain_j"), field("residue_j")));
         if (i == s.index.end() || j == s.index.end()) throw std::runtime_error("Contact refers to an absent residue");
@@ -303,7 +303,7 @@ std::vector<Contact> read_contacts(const Options& o, const Structure& s) {
         if (!seen.emplace(canonical.first, canonical.second).second) throw std::runtime_error("Duplicate/reversed contact in CSV");
         contacts.push_back({i->second, j->second, type}); // Preserve caller orientation.
     }
-    if (o.mode == "mutate" && contacts.empty()) throw std::runtime_error("No annotated contacts to mutate");
+    if (o.mode == "mutate" && contacts.empty()) throw std::runtime_error("No contacts to mutate");
     return contacts;
 }
 
@@ -368,6 +368,17 @@ Cache build_cache(const Structure& s, const Tables& tables, const Options& o) {
         cache.pairs.push_back(pair);
     }
     return cache;
+}
+
+// Selection follows the same identity-independent geometry as energy caching.
+// Do not filter by native E_pair: cancellation/zero native energy can conceal
+// nonzero contributions for alternative identities.
+std::vector<Contact> native_contacts(const Cache& cache) {
+    std::vector<Contact> contacts;
+    contacts.reserve(cache.pairs.size());
+    for (const auto& pair : cache.pairs)
+        contacts.push_back({pair.i, pair.j, "cgrnasp_range"});
+    return contacts;
 }
 
 Components weighted(const Components& raw, const Cache& cache) {
@@ -475,7 +486,7 @@ void write_run(const Options& o, const Structure& s, const Tables& tables, const
                std::size_t contacts, double elapsed) {
     auto out = output_file(o.output / "run.json");
     const auto energy = weighted(cache.native_raw, cache);
-    out << "{\n  \"program\": \"cgRNASP_frustration\",\n  \"version\": \"0.1.0\",\n"
+    out << "{\n  \"program\": \"cgRNASP_frustration\",\n  \"version\": \"0.2.0\",\n"
         << "  \"source_version\": " << json_string(CGRNASP_SOURCE_VERSION) << ",\n"
         << "  \"upstream_commit\": \"ff8c5a23727b725e636d0b52dead2cecdb624a87\",\n"
         << "  \"input\": " << json_string(o.input.string()) << ",\n"
@@ -484,6 +495,8 @@ void write_run(const Options& o, const Structure& s, const Tables& tables, const
         << "  \"contacts_file\": " << (o.contacts.empty() ? "null" : json_string(o.contacts.string())) << ",\n"
         << "  \"contacts_fingerprint_fnv1a64\": " << (o.contacts.empty() ? "null" : json_string(fingerprint(o.contacts))) << ",\n"
         << "  \"skip_unsupported_residues\": " << (o.skip_unsupported ? "true" : "false") << ",\n"
+        << "  \"contact_selection\": " << json_string(o.contacts.empty() ? "cgrnasp_distance_ranges" : "explicit_csv") << ",\n"
+        << "  \"contact_definition\": " << json_string("At least one present inter-residue bead pair has a valid bin in the applicable cgRNASP table; native energy is not a filter") << ",\n"
         << "  \"mode\": " << json_string(o.mode) << ",\n"
         << "  \"model_index\": " << o.model << ",\n  \"input_model_count\": " << s.models << ",\n"
         << "  \"sequence_separation\": " << json_string(o.separation) << ",\n"
@@ -512,8 +525,9 @@ int main(int argc, char** argv) {
         const Options o = options(argc, argv);
         const Tables tables = read_tables(o.data);
         const Structure s = read_structure(o);
-        const auto contacts = read_contacts(o, s);
+        const auto supplied_contacts = read_contacts(o, s);
         const Cache cache = build_cache(s, tables, o);
+        const auto contacts = o.contacts.empty() ? native_contacts(cache) : supplied_contacts;
         fs::create_directories(o.output);
         write_reference(o.output / "reference_cg.pdb", s);
         write_pairs(o.output / "pairs.csv", s, cache, contacts);

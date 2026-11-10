@@ -46,15 +46,34 @@ entries still reproduces the native `E_total`, up to summation roundoff.
 `score --contacts contacts.csv ...` can annotate selected reference pairs without
 generating variants. An energetic pair is not automatically a base pair or stack.
 
+## Contact selection (default)
+
+With no `--contacts`, both `score` and `mutate` select the native cgRNASP
+geometric pair graph. A residue pair is selected when at least one of its
+present bead pairs has a valid distance bin in the applicable upstream table.
+There is no external annotation dependency and no filter on native pair energy.
+Zero native energy, including cancellation, does not exclude a pair.
+
+This means model interactions, not necessarily base pairs or stacks. The upper
+range depends on sequence separation: approximately 5.1 A (1), 9 A (2), 12.9 A
+(3-4), and 24 A (>4 or inter-chain). Exact bin tests are shared with scoring.
+`contact_type` is `cgrnasp_range`; it is not a biological interaction annotation.
+Adjacent residues and longer-range contacts are included. Separate them when
+interpreting or visualising results rather than applying a hidden filter.
+
+`run.json` records `contact_selection` and `contact_definition`. Default selection
+has `contacts_file: null`. Each selected pair receives all 16 variants in one
+process, using the existing cache and unchanged potential tables.
+
 ## Contact mutation scan
 
 ```sh
 ./build/cgRNASP_frustration mutate input.pdb \
-  --contacts contacts.csv --data-dir ./cgRNASP/data \
+  --data-dir ./cgRNASP/data \
   --output-dir ./test-output/mutations
 ```
 
-Minimal contacts file:
+To deliberately restrict the scan, add `--contacts contacts.csv`. Minimal file:
 
 ```csv
 chain_i,residue_i,chain_j,residue_j,contact_type
@@ -63,10 +82,12 @@ A,3,A,11,example
 ```
 
 The `example` rows demonstrate the format, not a biological annotation.
-Use native contacts from an independent annotation or the same reference
-`pairs.csv` used in a BRiQ comparison. The four identifier columns are required;
+An explicit CSV replaces the default cgRNASP pair selection. Use it only for
+a deliberately restricted or matched comparison; no external annotation is
+needed for the default scan. The four identifier columns are required;
 `contact_type` is optional and defaults to `contact`. If it is provided, rows
-with an empty value or `unannotated` are excluded. Other columns are ignored.
+are all evaluated regardless of their annotation value. Empty labels default to
+`contact`. Other columns are ignored.
 Self-contacts, duplicates (including reversed duplicates) and absent identifiers
 are rejected. CSV orientation and annotation are preserved in variant output.
 Blank chain IDs are supported. Multiline CSV fields are not supported.
@@ -85,7 +106,7 @@ provided for diagnostics, not as a substitute for the total-energy protocol.
 
 `energy_components.csv` contains the reference plus all variants, identified by
 `state`, the four contact columns and `base_i,base_j`. These components differ
-from BRiQ's components. Do not feed this file to a BRiQ-specific component plot.
+from per-pair energies: they are the four weighted terms of the entire structure.
 
 ## Energy and exact incremental calculation
 
@@ -106,8 +127,8 @@ f(L) = -355/sqrt(L+16) + 72
 
 The CSV columns `E_seq1,E_seq2,E_seq3_4,E_long` are ALREADY weighted, so their
 sum is `E_total`. The output energy unit follows upstream: kBT.
-Only inter-residue terms are present; no BRiQ-style same-residue terms or
-separate new `E_clash` term are introduced. Short-distance penalties remain in
+Only the original inter-residue terms are present; no additional energy terms
+are introduced. Short-distance penalties remain in
 the original tables.
 
 The engine computes distance bins once and caches the 4x4 identity matrix for
@@ -154,14 +175,14 @@ O(16*(degree(i)+degree(j))), plus CSV output. There is no subprocess per mutant.
 ## Python integration
 
 `examples/python/cgrnasp.py` is a standard-library-only adapter that can be copied
-into the Python package. It accepts a prepared reference PDB, contacts CSV and
+into the Python package. It accepts a prepared reference PDB, optional contacts CSV and
 paths to this binary and its data directory. It returns native energy and paths
 to the same kinds of output files used by the existing analysis pipeline.
 
 Keep structure preparation in Gemmi. Bypass ModeRNA and the atomistic mutation
 cache on this scoring path. Keep the 16-state population-standard-deviation
 frustration formula and the same native contact list. Use the full-atom reference
-for existing structural plots, and omit the BRiQ component-plot argument.
+for structural plots; component plots use only E_seq1, E_seq2, E_seq3_4 and E_long.
 
 The native state occurs exactly once among the 16 combinations and retains its
 original geometry. Uniform weights are 1/16. This extension supplies energies;

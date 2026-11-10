@@ -10,11 +10,15 @@ python -m unittest discover -s tests -v
 ```
 
 ```sh
-./build/cgRNASP_frustration mutate input.pdb --contacts contacts.csv \
+./build/cgRNASP_frustration mutate input.pdb \
   --data-dir ./cgRNASP/data --output-dir ./test-output/mutations
 ```
 
 On Windows use `build/cgRNASP_frustration.exe`.
+
+By default, contacts are all residue pairs with a bead pair in the applicable
+cgRNASP distance range. Native zero-energy pairs
+are retained. Use `--contacts contacts.csv` only to explicitly restrict the scan.
 
 The scorer keeps P/C4'/N9-or-N1 coordinates fixed and updates nucleotide types in
 memory. `E_total` includes the effects on both residues' interactions with their

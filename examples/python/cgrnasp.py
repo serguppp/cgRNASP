@@ -18,25 +18,30 @@ class CgrnaspMutationResult:
 
 def run_cgrnasp_mutations(
     reference_path: Path,
-    contacts_file: Path,
     output_dir: Path,
     *,
+    contacts_file: Path | None = None,
     executable: Path,
     data_dir: Path,
     sequence_separation: Literal["pdb", "ordinal"] = "pdb",
 ) -> CgrnaspMutationResult:
-    """Score all 16 fixed-geometry variants for every supplied native contact.
+    """Score all 16 fixed-geometry variants for cgRNASP native pairs or an explicit contact list.
 
+    By default C++ selects all pairs in the cgRNASP distance ranges.
+    contacts_file is only needed to restrict the scan explicitly.
     Prepare a single-model, canonical RNA reference before calling this function.
     Noncanonical residues and unresolved alternate locations are rejected by C++.
     """
     reference_path = Path(reference_path).resolve()
-    contacts_file = Path(contacts_file).resolve()
+    contacts_file = Path(contacts_file).resolve() if contacts_file is not None else None
     output_dir = Path(output_dir).resolve()
     executable = Path(executable).resolve()
     data_dir = Path(data_dir).resolve()
 
-    for path in (reference_path, contacts_file, executable):
+    required_files = [reference_path, executable]
+    if contacts_file is not None:
+        required_files.append(contacts_file)
+    for path in required_files:
         if not path.is_file():
             raise FileNotFoundError(path)
     if not data_dir.is_dir():
@@ -51,8 +56,6 @@ def run_cgrnasp_mutations(
         str(executable),
         "mutate",
         str(reference_path),
-        "--contacts",
-        str(contacts_file),
         "--data-dir",
         str(data_dir),
         "--output-dir",
@@ -62,6 +65,9 @@ def run_cgrnasp_mutations(
         "--sequence-separation",
         sequence_separation,
     ]
+    if contacts_file is not None:
+        command.extend(["--contacts", str(contacts_file)])
+
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(

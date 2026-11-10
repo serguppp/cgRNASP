@@ -88,6 +88,66 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(set(energies), set(pdbs))
         return energies
 
+    def test_automatic_contacts_cover_the_scoring_graph_and_match_explicit_scan(self):
+        scored, _ = self.invoke()
+        native_pairs = rows(scored / "pairs.csv")
+        automatic, _ = self.invoke("mutate")
+        run = json.loads((automatic / "run.json").read_text())
+        self.assertEqual(run["contact_selection"], "cgrnasp_distance_ranges")
+        self.assertIsNone(run["contacts_file"])
+        self.assertEqual(run["contact_count"], run["cached_pair_count"])
+        self.assertEqual(run["contact_count"], len(native_pairs))
+        self.assertTrue(all(r["contact_type"] == "cgrnasp_range" for r in rows(automatic / "pairs.csv")))
+        self.assertEqual(len(rows(automatic / "contact_variants.csv")), 16 * len(native_pairs))
+        explicit, _ = self.invoke("mutate", contacts=scored / "pairs.csv")
+        self.assertEqual((automatic / "contact_variants.csv").read_bytes(),
+                         (explicit / "contact_variants.csv").read_bytes())
+
+    def test_automatic_contacts_use_geometry_even_with_zero_potential(self):
+        data = self.root / "zero-data"
+        data.mkdir()
+        for source in DATA.iterdir():
+            if source.suffix == ".potential":
+                lines = [" ".join(line.split()[:-1] + ["0"]) for line in source.read_text().splitlines() if line.strip()]
+                (data / source.name).write_text("\n".join(lines) + "\n")
+            else:
+                (data / source.name).write_bytes(source.read_bytes())
+        original, _ = self.invoke()
+        zero, _ = self.invoke("mutate", extra=["--data-dir", str(data)])
+        original_pairs = rows(original / "pairs.csv")
+        zero_pairs = rows(zero / "pairs.csv")
+        pair_key = lambda r: (r["chain_i"], r["residue_i"], r["chain_j"], r["residue_j"])
+        self.assertEqual({pair_key(r) for r in original_pairs}, {pair_key(r) for r in zero_pairs})
+        self.assertTrue(zero_pairs)
+        self.assertTrue(all(float(r["E_pair"]) == 0 for r in zero_pairs))
+        self.assertEqual(len(rows(zero / "contact_variants.csv")), 16 * len(zero_pairs))
+
+    def test_automatic_contacts_exclude_geometrically_isolated_residue(self):
+        source = self.root / "isolated.pdb"
+        lines = []
+        for line in FIXTURE.read_text().splitlines():
+            if line.startswith("ATOM  ") and residue_key(line) == ("A", "24"):
+                line = line[:30] + f"{float(line[30:38]) + 200:8.3f}" + line[38:]
+            lines.append(line)
+        source.write_text("\n".join(lines) + "\n")
+        destination, _ = self.invoke("mutate", source=source)
+        selected = rows(destination / "pairs.csv")
+        self.assertTrue(selected)
+        self.assertFalse(any(r["residue_i"] == "24" or r["residue_j"] == "24" for r in selected))
+
+    def test_python_adapter_defaults_to_native_cgrnasp_contacts(self):
+        sys.path.insert(0, str(ROOT / "examples/python"))
+        try:
+            from cgrnasp import run_cgrnasp_mutations
+        finally:
+            sys.path.pop(0)
+        result = run_cgrnasp_mutations(reference_path=FIXTURE, output_dir=self.root / "auto-python",
+                                      executable=BINARY, data_dir=DATA)
+        run = json.loads(result.run_file.read_text())
+        self.assertIsNone(run["contacts_file"])
+        self.assertEqual(run["contact_count"], run["cached_pair_count"])
+        self.assertEqual(len(rows(result.variants_file)), 16 * run["contact_count"])
+
     def test_native_matches_original_program(self):
         destination, _ = self.invoke()
         native = json.loads((destination / "run.json").read_text())["E_total"]
@@ -172,7 +232,7 @@ class ScoringTests(unittest.TestCase):
         self.assertAlmostEqual(json.loads((second / "run.json").read_text())["E_total"], expected["reference.pdb"], delta=6e-7)
         self.invoke(source=source, extra=["--model-index", "2"], success=False)
 
-    def test_contacts_filter_and_zero_distance_range_pair(self):
+    def test_explicit_contact_labels_do_not_control_selection(self):
         source = self.root / "distant.pdb"
         text = FIXTURE.read_text()
         for line in text.splitlines():
@@ -185,7 +245,8 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(float(selected[0]["E_pair"]), 0)
         variants = rows(destination / "contact_variants.csv")
-        self.assertEqual(len(variants), 16)
+        self.assertEqual(len(variants), 32)
+        self.assertTrue(any(row["contact_type"] == "unannotated" for row in variants))
         self.assertTrue(any(float(row["delta_E_total"]) != 0 for row in variants))
 
     def test_insertion_codes_require_explicit_separation(self):
@@ -227,7 +288,6 @@ class ScoringTests(unittest.TestCase):
             [("A", "1", "A", "1", "test")],
             [("A", "1", "A", "9999", "test")],
             [("A", "1", "A", "2", "test"), ("A", "2", "A", "1", "test")],
-            [("A", "1", "A", "2", "unannotated")],
         ]:
             self.invoke("mutate", contacts=self.contact_file(contacts), success=False)
 
