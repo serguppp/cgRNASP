@@ -453,6 +453,8 @@ void component_row(std::ostream& out, const std::string& state, const Structure&
 
 void write_variants(const fs::path& path, const Structure& s, const Cache& cache,
                     const std::vector<Contact>& contacts, std::ostream& components) {
+    auto scores = output_file(path.parent_path() / "contact_scores.csv");
+    scores << "chain_i,residue_i,chain_j,residue_j,native_E_pair,mean_E_pair,sd_E_pair,F_pair,native_E_total,mean_E_total,sd_E_total,F_total\n";
     auto out = output_file(path);
     out << "chain_i,residue_i,chain_j,residue_j,contact_type,base_i,base_j,native_E_total,E_total,delta_E_total,native_E_pair,E_pair\n";
     const double native = total(weighted(cache.native_raw, cache));
@@ -460,6 +462,7 @@ void write_variants(const fs::path& path, const Structure& s, const Cache& cache
         std::vector<std::size_t> affected;
         std::set_union(cache.incident[c.i].begin(), cache.incident[c.i].end(), cache.incident[c.j].begin(), cache.incident[c.j].end(), std::back_inserter(affected));
         const double native_pair = pair_energy(s, cache, c, s.residues[c.i].base, s.residues[c.j].base);
+        std::vector<double> pair_values, total_deltas;
         for (char a : std::string(ENUMERATION)) for (char b : std::string(ENUMERATION)) {
             const int x = base_index(a), y = base_index(b);
             Components delta{};
@@ -474,11 +477,26 @@ void write_variants(const fs::path& path, const Structure& s, const Cache& cache
             for (std::size_t t = 0; t < 4; ++t) raw[t] += delta[t];
             const Components energy = weighted(raw, cache);
             const double full = total(energy);
+            pair_values.push_back(pair_energy(s, cache, c, x, y));
+            total_deltas.push_back(full - native);
             prefix(out, s, c);
             out << ',' << csv(c.type) << ',' << a << ',' << b << ',' << native << ',' << full << ',' << full - native
                 << ',' << native_pair << ',' << pair_energy(s, cache, c, x, y) << '\n';
             component_row(components, "variant", s, &c, a, b, energy);
         }
+        prefix(scores, s, c);
+        const auto statistics = [&](const std::vector<double>& values, double reference, double offset) {
+            double mean = 0.0;
+            for (double value : values) mean += (value - reference) / 16.0;
+            double variance = 0.0;
+            for (double value : values) variance += (value - reference - mean) * (value - reference - mean) / 16.0;
+            const double sigma = std::sqrt(variance);
+            scores << ',' << reference + offset << ',' << mean + reference + offset << ',' << sigma << ',';
+            if (sigma > 0.0) scores << mean / sigma;
+        };
+        statistics(pair_values, native_pair, 0.0);
+        statistics(total_deltas, 0.0, native);
+        scores << '\n';
     }
 }
 

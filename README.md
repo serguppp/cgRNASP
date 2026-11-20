@@ -51,3 +51,13 @@ zjtan@whu.edu.cn
 
 Reference:                                      
 [1] Tan YL, Wang X, Yu S, Zhang B, & Tan ZJ. 2023. cgRNASP: coarse-grained statistical potentials with residue separation for RNA structure evaluation. NAR Genom Bioinform. 5(1): lqad016.
+
+## Two energy strategies
+
+Mutation scans now also write `contact_scores.csv`: native/mean/population SD
+and `F_pair`, `F_total` for the same 16 states and same contact list.
+`E_pair` is the weighted sum of bead interactions between the selected residues;
+`E_total` also includes their interactions with all other residues.
+Both use F = (mean variant energy - native energy) / population SD.
+Zero SD is exported as an empty F, never zero. Variant energies remain in
+`contact_variants.csv`; no extra scoring passes are needed.

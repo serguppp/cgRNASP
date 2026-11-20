@@ -148,6 +148,31 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(run["contact_count"], run["cached_pair_count"])
         self.assertEqual(len(rows(result.variants_file)), 16 * run["contact_count"])
 
+    def test_both_frustration_strategies_match_exported_variant_energies(self):
+        from statistics import fmean, pstdev
+        destination, _ = self.invoke("mutate")
+        groups = {}
+        for row in rows(destination / "contact_variants.csv"):
+            key = tuple(row[k] for k in ("chain_i", "residue_i", "chain_j", "residue_j"))
+            groups.setdefault(key, []).append(row)
+        summaries = rows(destination / "contact_scores.csv")
+        self.assertEqual(len(summaries), len(groups))
+        for summary in summaries:
+            key = tuple(summary[k] for k in ("chain_i", "residue_i", "chain_j", "residue_j"))
+            variants = groups[key]
+            for strategy in ("pair", "total"):
+                native = float(variants[0][f"native_E_{strategy}"])
+                values = [float(r[f"E_{strategy}"]) for r in variants]
+                deltas = [v - native for v in values]
+                mean, sd = fmean(deltas), pstdev(deltas)
+                self.assertAlmostEqual(float(summary[f"native_E_{strategy}"]), native, delta=1e-10)
+                self.assertAlmostEqual(float(summary[f"mean_E_{strategy}"]), native + mean, delta=1e-10)
+                self.assertAlmostEqual(float(summary[f"sd_E_{strategy}"]), sd, delta=1e-10)
+                if sd == 0:
+                    self.assertEqual(summary[f"F_{strategy}"], "")
+                else:
+                    self.assertAlmostEqual(float(summary[f"F_{strategy}"]), mean / sd, delta=1e-10)
+
     def test_native_matches_original_program(self):
         destination, _ = self.invoke()
         native = json.loads((destination / "run.json").read_text())["E_total"]
